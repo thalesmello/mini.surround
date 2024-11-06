@@ -684,7 +684,6 @@ MiniSurround.config = {
     highlight = 'sh', -- Highlight surrounding
     replace = 'sr', -- Replace surrounding
     yank = 'sy', -- Yank surrounding
-    paste = 'sp', -- Yank surrounding
     update_n_lines = 'sn', -- Update `n_lines`
 
     suffix_last = 'l', -- Suffix to search with "prev" method
@@ -716,7 +715,7 @@ MiniSurround.config = {
 --- No need to use it directly, everything is setup in |MiniSurround.setup|.
 ---
 ---@param mode string Mapping mode (normal by default).
-MiniSurround.add = function(mode, given_surround)
+MiniSurround.add = function(mode)
   -- Needed to disable in visual mode
   if H.is_disabled() then return '<Esc>' end
 
@@ -726,9 +725,7 @@ MiniSurround.add = function(mode, given_surround)
   -- Get surround info. Try take from cache only in not visual mode (as there
   -- is no intended dot-repeatability).
   local surr_info
-  if given_surround then
-    surr_info = given_surround
-  elseif mode == 'visual' then
+  if mode == 'visual' then
     surr_info = H.get_surround_spec('output', false)
   else
     surr_info = H.get_surround_spec('output', true)
@@ -873,13 +870,6 @@ MiniSurround.yank = function()
   vim.fn.setreg(vim.v.register, vim.json.encode(output_surround))
 end
 
-
-MiniSurround.paste = function(mode)
-  local ok, surr = pcall(vim.json.decode, vim.fn.getreg(vim.v.register), {objects = true, arrays = true})
-  if ok then
-    MiniSurround.add(mode, surr)
-  end
-end
 
 --- Find surrounding
 ---
@@ -1158,6 +1148,37 @@ H.builtin_surroundings = {
   },
   -- Quotes
   ['q'] = { input = { { "'.-'", '".-"', '`.-`' }, '^.().*().$' }, output = { left = '"', right = '"' } },
+
+  ['<c-r>'] = {
+    output = function()
+      local ok, register = pcall(vim.fn.getcharstr)
+
+      if not ok and not register then
+        return nil
+      end
+
+      if vim.list_contains(vim.tbl_map(function(c) return vim.api.nvim_replace_termcodes(c, true, true, true) end, { "<c-r>", "<cr>", "<space>"}), register) then
+        -- use the default register in any of the cases above
+        register = '"'
+      end
+
+      local surr_json
+      ok, surr_json = pcall(vim.fn.getreg, register)
+
+      if not ok then
+        return nil
+      end
+
+      local surr
+      ok, surr = pcall(vim.json.decode, surr_json, {objects = true, arrays = true})
+
+      if not ok and (not surr.left or surr.right) then
+        return nil
+      end
+
+      return surr
+    end,
+  },
 }
 
 -- Cache for dot-repeatability. This table is currently used with these keys:
@@ -1218,7 +1239,6 @@ H.apply_config = function(config)
   expr_map(m.delete,  H.make_operator('delete'),         'Delete surrounding')
   expr_map(m.replace, H.make_operator('replace'),        'Replace surrounding')
   expr_map(m.yank,    H.make_operator('yank'),           'Yank surrounding')
-  expr_map(m.paste,   H.make_operator('paste', nil, true), 'Paste surrounding')
 
   map(m.find,      H.make_action('find', 'right'), 'Find right surrounding')
   map(m.find_left, H.make_action('find', 'left'),  'Find left surrounding')
@@ -1362,14 +1382,23 @@ end
 H.make_surrounding_table = function()
   -- Extend builtins with data from `config`
   local surroundings = vim.deepcopy(H.builtin_surroundings)
+  surroundings = vim.iter(surroundings)
+    :map(function(k, v) return vim.api.nvim_replace_termcodes(k, true, true, true), v end)
+    :fold({}, function(acc, k, v)
+      acc[k] = v
+      return acc
+    end
+  )
+
   for char, spec in pairs(H.get_config().custom_surroundings or {}) do
     local cur_spec = surroundings[char] or {}
     local default = H.get_default_surrounding_info(char)
     -- NOTE: Don't use `tbl_deep_extend` to prefer full `input` arrays
     cur_spec.input = spec.input or cur_spec.input or default.input
     cur_spec.output = spec.output or cur_spec.output or default.output
-    surroundings[char] = cur_spec
+    surroundings[vim.api.nvim_replace_termcodes(char, true, true, true)] = cur_spec
   end
+
 
   -- Use default surrounding info for not supplied single character identifier
   return setmetatable(surroundings, {
@@ -1987,11 +2016,6 @@ H.user_surround_id = function(sur_type)
 
   -- Terminate if couldn't get input (like with <C-c>) or it is `<Esc>`
   if not ok or char == '\27' then return nil end
-
-  if char:find('^[%w%p%s]$') == nil then
-    H.message('Input must be single character: alphanumeric, punctuation, or space.')
-    return nil
-  end
 
   return char
 end
