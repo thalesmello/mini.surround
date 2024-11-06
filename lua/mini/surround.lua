@@ -683,6 +683,8 @@ MiniSurround.config = {
     find_left = 'sF', -- Find surrounding (to the left)
     highlight = 'sh', -- Highlight surrounding
     replace = 'sr', -- Replace surrounding
+    yank = 'sy', -- Yank surrounding
+    paste = 'sp', -- Yank surrounding
     update_n_lines = 'sn', -- Update `n_lines`
 
     suffix_last = 'l', -- Suffix to search with "prev" method
@@ -714,7 +716,7 @@ MiniSurround.config = {
 --- No need to use it directly, everything is setup in |MiniSurround.setup|.
 ---
 ---@param mode string Mapping mode (normal by default).
-MiniSurround.add = function(mode)
+MiniSurround.add = function(mode, given_surround)
   -- Needed to disable in visual mode
   if H.is_disabled() then return '<Esc>' end
 
@@ -724,7 +726,9 @@ MiniSurround.add = function(mode)
   -- Get surround info. Try take from cache only in not visual mode (as there
   -- is no intended dot-repeatability).
   local surr_info
-  if mode == 'visual' then
+  if given_surround then
+    surr_info = given_surround
+  elseif mode == 'visual' then
     surr_info = H.get_surround_spec('output', false)
   else
     surr_info = H.get_surround_spec('output', true)
@@ -846,6 +850,36 @@ MiniSurround.replace = function()
   -- Set cursor to be on the right of left surrounding
   local from = surr.left.from
   H.set_cursor(from.line, from.col + new_surr_info.left:len())
+end
+
+--- Yank surrounding
+---
+--- No need to use it directly, everything is setup in |MiniSurround.setup|.
+MiniSurround.yank = function()
+  -- Find input surrounding region
+  local surr = H.find_surrounding(H.get_surround_spec('input'))
+  if surr == nil then return '<Esc>' end
+
+  -- -- Get output surround info
+  -- local new_surr_info = H.get_surround_spec('output', true)
+  -- if new_surr_info == nil then return '<Esc>' end
+  --
+  -- Replace by parts starting from right to not break column numbers
+  local left = H.region_get_text(surr.left)
+  local right = H.region_get_text(surr.right)
+  vim.print(surr)
+
+  local output_surround = {left = left, right = right}
+
+  H.yanked_surround = output_surround
+  vim.print(output_surround)
+end
+
+
+MiniSurround.paste = function(mode)
+  if H.yanked_surround then
+    MiniSurround.add(mode, H.yanked_surround)
+  end
 end
 
 --- Find surrounding
@@ -1184,6 +1218,8 @@ H.apply_config = function(config)
   expr_map(m.add,     H.make_operator('add', nil, true), 'Add surrounding')
   expr_map(m.delete,  H.make_operator('delete'),         'Delete surrounding')
   expr_map(m.replace, H.make_operator('replace'),        'Replace surrounding')
+  expr_map(m.yank,    H.make_operator('yank'),           'Yank surrounding')
+  expr_map(m.paste,   H.make_operator('paste', nil, true), 'Paste surrounding')
 
   map(m.find,      H.make_action('find', 'right'), 'Find right surrounding')
   map(m.find_left, H.make_action('find', 'left'),  'Find left surrounding')
@@ -2003,6 +2039,34 @@ H.region_replace = function(region, text)
 
   -- Replace. Use `pcall()` to do nothing if some position is out of bounds.
   pcall(vim.api.nvim_buf_set_text, 0, start_row, start_col, end_row, end_col, text)
+end
+
+H.region_get_text = function(region)
+  -- Compute start and end position for `vim.api.nvim_buf_get_text()`.
+  -- Indexing is zero-based. Rows - end-inclusive, columns - end-exclusive.
+  local start_row, start_col = region.from.line - 1, region.from.col - 1
+
+  local end_row, end_col
+  -- Allow empty region
+  if H.region_is_empty(region) then
+    end_row, end_col = start_row, start_col
+  else
+    end_row, end_col = region.to.line - 1, region.to.col
+
+    -- Possibly correct to allow removing new line character
+    if end_row < vim.api.nvim_buf_line_count(0) and H.get_line_cols(end_row + 1) < end_col then
+      end_row, end_col = end_row + 1, 0
+    end
+  end
+
+  -- Replace. Use `pcall()` to do nothing if some position is out of bounds.
+  local ok, vals = pcall(vim.api.nvim_buf_get_text, 0, start_row, start_col, end_row, end_col, {})
+  vim.print('batman', 0, start_row, start_col, end_row, end_col)
+
+  if ok then
+    local newvals = table.concat(vals, '\n')
+    return newvals
+  end
 end
 
 H.surr_to_pos_array = function(surr)
