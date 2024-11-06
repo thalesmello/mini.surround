@@ -867,18 +867,17 @@ MiniSurround.yank = function()
   -- Replace by parts starting from right to not break column numbers
   local left = H.region_get_text(surr.left)
   local right = H.region_get_text(surr.right)
-  vim.print(surr)
 
   local output_surround = {left = left, right = right}
 
-  H.yanked_surround = output_surround
-  vim.print(output_surround)
+  vim.fn.setreg(vim.v.register, vim.json.encode(output_surround))
 end
 
 
 MiniSurround.paste = function(mode)
-  if H.yanked_surround then
-    MiniSurround.add(mode, H.yanked_surround)
+  local ok, surr = pcall(vim.json.decode, vim.fn.getreg(vim.v.register), {objects = true, arrays = true})
+  if ok then
+    MiniSurround.add(mode, surr)
   end
 end
 
